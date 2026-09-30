@@ -178,6 +178,7 @@ function manageTimers(
  */
 export function useFinessePolling(onAgents: (agents: Agent[]) => void) {
     const [agents, setAgents] = useState<Agent[]>([]);
+    const [offered, setOffered] = useState(0);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -211,6 +212,13 @@ export function useFinessePolling(onAgents: (agents: Agent[]) => void) {
 
             const receivedAt = Date.now();
             const updated = Array.isArray(data.agents) ? data.agents : [];
+
+            /*
+             * Offered: snapshot backend call_nasional
+             * (callPerformance[0][0].Offer). Dibaca apa adanya,
+             * tidak dihitung ulang di frontend.
+             */
+            setOffered(Number(data.offered ?? updated[0]?.offered ?? 0) || 0);
 
             // Timer Makan: Not Ready + reason mengandung "makan".
             manageTimers(mealTimers.current, updated, receivedAt, (agent) => {
@@ -310,6 +318,7 @@ export function useFinessePolling(onAgents: (agents: Agent[]) => void) {
 
     return {
         agents,
+        offered,
         loading,
         error,
         lastUpdate,

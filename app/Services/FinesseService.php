@@ -10,10 +10,57 @@ use RuntimeException;
 class FinesseService
 {
     private string $url =
-    'http://10.14.155.34/dashboardv3/cubemap/getdataJsonCall';
+        'http://10.14.155.34/dashboardv3/cubemap/getdataJsonCall';
 
     private string $digitalUrl =
-    'http://10.14.155.34/dashboardv3/cubemap/getJsonDigital';
+        'http://10.14.155.34/dashboardv3/cubemap/getJsonDigital';
+
+    /**
+     * OFFERED (card dashboard call_nasional).
+     *
+     * Nilai diambil apa adanya dari snapshot backend
+     * call_nasional -> callPerformance[0][0].Offer.
+     * Tidak dihitung ulang di sini.
+     */
+    private string $callNasionalUrl =
+        'http://10.14.155.34/dashboardv3/call_nasional/getDataJson';
+
+    /**
+     * =========================================================
+     * OFFERED (SNAPSHOT BACKEND CALL_NASIONAL)
+     * =========================================================
+     *
+     * Hanya membaca field Offer dari endpoint call_nasional.
+     * Tidak menghitung/menyimpan counter sendiri.
+     * Jika endpoint gagal atau field tidak ada -> 0,
+     * tanpa mengganggu Voice/Digital/Auxiliary.
+     */
+    private function fetchOffered(): int
+    {
+        try {
+            $response = Http::timeout(10)->post($this->callNasionalUrl);
+
+            if (!$response->successful()) {
+                return 0;
+            }
+
+            $data = $response->json();
+
+            if (!is_array($data)) {
+                return 0;
+            }
+
+            $offer = $data['callPerformance'][0][0]['Offer'] ?? null;
+
+            return is_numeric($offer) ? (int) $offer : 0;
+        } catch (\Throwable $e) {
+            Log::warning('Gagal mengambil data Offered.', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return 0;
+        }
+    }
 
     /**
      * =========================================================
@@ -60,7 +107,7 @@ class FinesseService
         if (!$response->successful()) {
             throw new RuntimeException(
                 'Gagal mengambil data Finesse. HTTP: ' .
-                    $response->status()
+                $response->status()
             );
         }
 
@@ -133,7 +180,7 @@ class FinesseService
         if (!$response->successful()) {
             throw new RuntimeException(
                 'Gagal mengambil data Digital. HTTP: ' .
-                    $response->status()
+                $response->status()
             );
         }
 
@@ -217,6 +264,9 @@ class FinesseService
     {
         $voiceData = $this->fetchVoiceData();
 
+        /** Offered: snapshot card call_nasional. */
+        $offered = $this->fetchOffered();
+
         $voice = collect($voiceData['tempData'] ?? [])
             ->filter(function ($agent) use ($unit) {
                 return (int) ($agent['UNIT'] ?? 0) === $unit;
@@ -253,7 +303,7 @@ class FinesseService
             });
 
         return collect($voice)
-            ->map(function ($agent) use ($digitalByName, $auxiliaryByName) {
+            ->map(function ($agent) use ($digitalByName, $auxiliaryByName, $offered) {
                 $name = strtoupper(
                     trim(
                         (string) (
@@ -285,31 +335,31 @@ class FinesseService
                      */
                     $currentState = [
                         'state' =>
-                        $digitalAgent['AgentState']
+                            $digitalAgent['AgentState']
                             ?? null,
 
                         'reason_code' =>
-                        $digitalAgent['ReasonCode']
+                            $digitalAgent['ReasonCode']
                             ?? null,
 
                         'reason' =>
-                        $digitalAgent['Reason']
+                            $digitalAgent['Reason']
                             ?? null,
 
                         'call_in_progress' =>
-                        $digitalAgent['CallInProgress']
+                            $digitalAgent['CallInProgress']
                             ?? null,
 
                         'chat' =>
-                        $digitalAgent['CHAT']
+                            $digitalAgent['CHAT']
                             ?? null,
 
                         'chat_mobile' =>
-                        $digitalAgent['CHATMOBILE']
+                            $digitalAgent['CHATMOBILE']
                             ?? null,
 
                         'email' =>
-                        $digitalAgent['EMAIL']
+                            $digitalAgent['EMAIL']
                             ?? null,
                     ];
 
@@ -388,32 +438,32 @@ class FinesseService
                                     $digitalName
                                 )
                             ) .
-                                ' DIGITAL ACTIVE CHANGE',
+                            ' DIGITAL ACTIVE CHANGE',
                             [
                                 'server_time' =>
-                                now()->format(
-                                    'Y-m-d H:i:s'
-                                ),
+                                    now()->format(
+                                        'Y-m-d H:i:s'
+                                    ),
 
                                 'name' =>
-                                $digitalName,
+                                    $digitalName,
 
                                 'previous_active' =>
-                                (bool)
-                                $previousDigitalActive,
+                                    (bool) 
+                                    $previousDigitalActive,
 
                                 'current_active' =>
-                                $currentDigitalActive,
+                                    $currentDigitalActive,
 
                                 'state' =>
-                                $digitalAgent['AgentState']
+                                    $digitalAgent['AgentState']
                                     ?? null,
 
                                 'call_in_progress' =>
-                                $callInProgressNow,
+                                    $callInProgressNow,
 
                                 'duration' =>
-                                $currentDuration,
+                                    $currentDuration,
                             ]
                         );
                     }
@@ -443,8 +493,8 @@ class FinesseService
 
                         $startedAt =
                             $detectedAt
-                            ->copy()
-                            ->subSeconds($duration);
+                                ->copy()
+                                ->subSeconds($duration);
 
                         $startedAtTimestamp =
                             $startedAt->timestamp;
@@ -463,33 +513,33 @@ class FinesseService
                                     $digitalName
                                 )
                             ) .
-                                ' DIGITAL START',
+                            ' DIGITAL START',
                             [
                                 'server_time' =>
-                                $detectedAt->format(
-                                    'Y-m-d H:i:s'
-                                ),
+                                    $detectedAt->format(
+                                        'Y-m-d H:i:s'
+                                    ),
 
                                 'name' =>
-                                $digitalName,
+                                    $digitalName,
 
                                 'duration' =>
-                                $duration,
+                                    $duration,
 
                                 'estimated_start' =>
-                                $startedAt->format(
-                                    'Y-m-d H:i:s'
-                                ),
+                                    $startedAt->format(
+                                        'Y-m-d H:i:s'
+                                    ),
 
                                 'previous_active' =>
-                                $previousDigitalActive,
+                                    $previousDigitalActive,
 
                                 'state' =>
-                                $digitalAgent['AgentState']
+                                    $digitalAgent['AgentState']
                                     ?? null,
 
                                 'call_in_progress' =>
-                                $callInProgressNow,
+                                    $callInProgressNow,
                             ]
                         );
                     }
@@ -518,7 +568,7 @@ class FinesseService
                         $sessionDuration = max(
                             0,
                             now()->timestamp
-                                - (int) $startedAtTimestamp
+                            - (int) $startedAtTimestamp
                         );
                     }
 
@@ -538,7 +588,7 @@ class FinesseService
                         $sessionDuration = max(
                             0,
                             now()->timestamp
-                                - (int) $startedAtTimestamp
+                            - (int) $startedAtTimestamp
                         );
 
                         Log::info(
@@ -549,28 +599,28 @@ class FinesseService
                                     $digitalName
                                 )
                             ) .
-                                ' DIGITAL END',
+                            ' DIGITAL END',
                             [
                                 'server_time' =>
-                                now()->format(
-                                    'Y-m-d H:i:s'
-                                ),
+                                    now()->format(
+                                        'Y-m-d H:i:s'
+                                    ),
 
                                 'name' =>
-                                $digitalName,
+                                    $digitalName,
 
                                 'duration_api' =>
-                                $currentDuration,
+                                    $currentDuration,
 
                                 'session_duration' =>
-                                $sessionDuration,
+                                    $sessionDuration,
 
                                 'state' =>
-                                $digitalAgent['AgentState']
+                                    $digitalAgent['AgentState']
                                     ?? null,
 
                                 'call_in_progress' =>
-                                $callInProgressNow,
+                                    $callInProgressNow,
                             ]
                         );
 
@@ -609,24 +659,24 @@ class FinesseService
                                     $digitalName
                                 )
                             ) .
-                                ' DIGITAL EVENT CHANGE',
+                            ' DIGITAL EVENT CHANGE',
                             [
                                 'server_time' =>
-                                now()->format(
-                                    'Y-m-d H:i:s'
-                                ),
+                                    now()->format(
+                                        'Y-m-d H:i:s'
+                                    ),
 
                                 'name' =>
-                                $digitalName,
+                                    $digitalName,
 
                                 'previous' =>
-                                $previousState,
+                                    $previousState,
 
                                 'current' =>
-                                $currentState,
+                                    $currentState,
 
                                 'duration' =>
-                                $currentDuration,
+                                    $currentDuration,
                             ]
                         );
 
@@ -645,74 +695,74 @@ class FinesseService
                  */
                 return [
                     'name' =>
-                    $agent['NAMA'] ?? null,
+                        $agent['NAMA'] ?? null,
 
                     'voice' => [
                         'status' =>
-                        $agent['STATUS'] ?? null,
+                            $agent['STATUS'] ?? null,
 
                         'reason' =>
-                        $agent['REASON'] ?? null,
+                            $agent['REASON'] ?? null,
 
                         'duration' =>
-                        $agent['DURATION'] ?? null,
+                            $agent['DURATION'] ?? null,
 
                         'ready' =>
-                        $agent['READY'] ?? null,
+                            $agent['READY'] ?? null,
 
                         'not_ready' =>
-                        $agent['NOTREADY'] ?? null,
+                            $agent['NOTREADY'] ?? null,
 
                         'handled' =>
-                        $agent['HANDLED'] ?? 0,
+                            $agent['HANDLED'] ?? 0,
 
                         'extension' =>
-                        $agent['EXTENTION'] ?? null,
+                            $agent['EXTENTION'] ?? null,
                     ],
 
                     'digital' =>
-                    $digitalAgent
+                        $digitalAgent
                         ? [
                             'status' =>
-                            $digitalAgent['AgentState']
+                                $digitalAgent['AgentState']
                                 ?? null,
 
                             'reason' =>
-                            $digitalAgent['Reason']
+                                $digitalAgent['Reason']
                                 ?? null,
 
                             'reason_code' =>
-                            $digitalAgent['ReasonCode']
+                                $digitalAgent['ReasonCode']
                                 ?? null,
 
                             'duration' =>
-                            $digitalAgent['Duration']
+                                $digitalAgent['Duration']
                                 ?? 0,
 
                             'chat' =>
-                            $digitalAgent['CHAT']
+                                $digitalAgent['CHAT']
                                 ?? 'NO',
 
                             'chat_mobile' =>
-                            $digitalAgent['CHATMOBILE']
+                                $digitalAgent['CHATMOBILE']
                                 ?? 'NO',
 
                             'email' =>
-                            $digitalAgent['EMAIL']
+                                $digitalAgent['EMAIL']
                                 ?? 'NO',
 
                             'call_in_progress' =>
-                            $digitalAgent['CallInProgress']
+                                $digitalAgent['CallInProgress']
                                 ?? 0,
 
                             'active' =>
-                            $currentDigitalActive,
+                                $currentDigitalActive,
 
                             'session_active' =>
-                            $sessionActive,
+                                $sessionActive,
 
                             'session_duration' =>
-                            $sessionDuration,
+                                $sessionDuration,
                         ]
                         : null,
 
@@ -730,6 +780,9 @@ class FinesseService
                             )
                         )
                         : null,
+
+                    /** Offered (snapshot backend call_nasional). */
+                    'offered' => $offered,
                 ];
             })
             ->values()

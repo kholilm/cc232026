@@ -32,6 +32,8 @@ export interface Agent {
     name: string;
     voice: VoiceData | null;
     digital: DigitalData | null;
+    /** Offered: snapshot card call_nasional (callPerformance[0][0].Offer). */
+    offered?: number;
     auxiliary?: {
         toilet_minutes: number;
         makan_minutes: number;
@@ -82,6 +84,8 @@ export interface FinesseResponse {
     success: boolean;
     unit: number;
     total: number;
+    /** Offered: snapshot card call_nasional (callPerformance[0][0].Offer). */
+    offered?: number;
     agents: Agent[];
     timestamp: string;
     message?: string;

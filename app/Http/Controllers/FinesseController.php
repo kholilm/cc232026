@@ -70,10 +70,18 @@ class FinesseController extends Controller
         try {
             $agents = $this->finesseService->getCombined(23);
 
+            /**
+             * Offered = snapshot card call_nasional
+             * (callPerformance[0][0].Offer). Diteruskan apa adanya
+             * dari agent pertama; 0 jika tidak tersedia.
+             */
+            $offered = (int) ($agents[0]['offered'] ?? 0);
+
             return response()->json([
                 'success' => true,
                 'unit' => 23,
                 'total' => count($agents),
+                'offered' => $offered,
                 'agents' => $agents,
                 'timestamp' => now()->toIso8601String(),
             ]);

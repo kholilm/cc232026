@@ -17,6 +17,7 @@ import {
     Expand,
     Headphones,
     MessageCircle,
+    PhoneCall,
     RefreshCw,
     Users,
     Wifi,
@@ -61,6 +62,7 @@ export default function ReleaseMonitor() {
 
     const {
         agents,
+        offered,
         loading,
         error,
         lastUpdate,
@@ -105,6 +107,12 @@ export default function ReleaseMonitor() {
     const digitalActiveCount = agents.filter((a) =>
         isDigitalActive(a.digital),
     ).length;
+
+    /*
+     * Offered = snapshot backend call_nasional
+     * (callPerformance[0][0].Offer). Tidak dihitung di frontend.
+     */
+    const offeredCount = Number(offered ?? 0);
 
     const dateText = currentTime
         ? currentTime.toLocaleDateString('id-ID', {
@@ -157,7 +165,7 @@ export default function ReleaseMonitor() {
                     </div>
                 )}
 
-                <div className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-5">
+                <div className="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-6">
                     <SummaryCard
                         title="Total CSO"
                         value={agents.length}
@@ -181,6 +189,14 @@ export default function ReleaseMonitor() {
                         icon={<Headphones className="h-5 w-5 text-blue-600" />}
                         iconClass="bg-blue-100"
                         cardClass="border-blue-100 bg-white"
+                    />
+                    <SummaryCard
+                        title="Offered"
+                        value={offeredCount}
+                        description="Total call masuk"
+                        icon={<PhoneCall className="h-5 w-5 text-cyan-600" />}
+                        iconClass="bg-cyan-100"
+                        cardClass="border-cyan-100 bg-white"
                     />
                     <SummaryCard
                         title="Digital Active"
