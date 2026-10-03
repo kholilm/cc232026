@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import FlashMessage from '@/components/common/flash-message';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
@@ -23,6 +24,11 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '@/components/ui/popover';
 
 /**
  * Permission Release Schedule.
@@ -123,6 +129,44 @@ type AlertItem = {
 };
 
 const SHIFTS = ['X', 'A', 'B', 'E', 'F', 'H', 'J', 'P', 'R'];
+
+/**
+ * ============================================================
+ * FILTER SHIFT (MULTI-SELECT)
+ * ============================================================
+ *
+ * CATATAN PENTING:
+ * Backend ReleaseScheduleController hanya mendukung SATU nilai
+ * (`where('shift', $shift)`), sehingga mengirim `shift=X,H`
+ * menghasilkan 0 baris (dibaca sebagai satu nilai harfiah).
+ *
+ * Karena itu parameter `shift` TIDAK PERNAH dikirim ke server;
+ * server selalu mengembalikan seluruh shift pada tanggal
+ * terpilih, lalu multi-select disaring di client oleh
+ * `visibleGroups`.
+ */
+
+/**
+ * Normalisasi nilai shift untuk perbandingan (bukan mengubah data).
+ * Menjaga perbandingan tetap benar walau ada spasi/beda kapital.
+ */
+const normalizeShift = (value: unknown): string =>
+    String(value ?? '')
+        .trim()
+        .toUpperCase();
+
+/** Label dropdown Shift: Semua / Shift F / 3 Shift Dipilih. */
+const shiftFilterLabel = (shifts: string[]): string => {
+    if (shifts.length === 0) {
+        return 'Semua Shift';
+    }
+
+    if (shifts.length === 1) {
+        return `Shift ${shifts[0]}`;
+    }
+
+    return `${shifts.length} Shift Dipilih`;
+};
 
 /**
  * =========================================================
@@ -625,7 +669,25 @@ export default function ScheduleIndex({ groups, filters }: Props) {
 
     const [date, setDate] = useState(filters.date);
 
-    const [shift, setShift] = useState(filters.shift ?? '');
+    /**
+     * Filter Shift (multi-select).
+     *
+     * []          -> Semua Shift
+     * ['F']       -> hanya Shift F
+     * ['F','H']   -> Shift F dan H
+     *
+     * Nilai awal diturunkan dari query parameter `shift`
+     * (format lama `shift=F` tetap terbaca).
+     */
+    const [selectedShifts, setSelectedShifts] = useState<string[]>(() =>
+        (filters.shift ?? '')
+            .split(',')
+            .map((item) => item.trim().toUpperCase())
+            .filter(Boolean),
+    );
+
+    /** Dropdown multi-select Shift (Popover) open state. */
+    const [shiftDropdownOpen, setShiftDropdownOpen] = useState(false);
 
     /**
      * Search input lokal.
@@ -750,6 +812,42 @@ export default function ScheduleIndex({ groups, filters }: Props) {
 
     /**
      * =====================================================
+     * FILTER SHIFT (CLIENT-SIDE)
+     * =====================================================
+     *
+     * Backend hanya mendukung satu nilai `shift`, sedangkan
+     * filter ini multi-select. Maka data diambil TANPA filter
+     * shift dari server, lalu shift dipilih di sisi client
+     * dengan anggota `selectedShifts`.
+     *
+     * Catatan: filter ini hanya diterapkan ketika TIDAK
+     * memilih semua shift yang tersedia, sehingga tampilan
+     * bawaan (Semua Shift) tetap identik dengan sebelumnya.
+     */
+    const visibleGroups = useMemo(() => {
+        if (selectedShifts.length === 0) {
+            return groups;
+        }
+
+        const availableShifts = Array.from(
+            new Set(groups.map((group) => normalizeShift(group.shift))),
+        );
+
+        const selectsAllAvailable =
+            availableShifts.length > 0 &&
+            availableShifts.every((item) => selectedShifts.includes(item));
+
+        if (selectsAllAvailable) {
+            return groups;
+        }
+
+        return groups.filter((group) =>
+            selectedShifts.includes(normalizeShift(group.shift)),
+        );
+    }, [groups, selectedShifts]);
+
+    /**
+     * =====================================================
      * SEARCH
      *
      * SEARCH TIDAK AUTO REFRESH.
@@ -775,7 +873,6 @@ export default function ScheduleIndex({ groups, filters }: Props) {
             '/release-schedule',
             {
                 date,
-                shift: shift || undefined,
                 search: value || undefined,
             },
             {
@@ -800,7 +897,6 @@ export default function ScheduleIndex({ groups, filters }: Props) {
             '/release-schedule',
             {
                 date: value,
-                shift: shift || undefined,
                 search: submittedSearch || undefined,
             },
             {
@@ -813,27 +909,39 @@ export default function ScheduleIndex({ groups, filters }: Props) {
 
     /**
      * =====================================================
-     * SHIFT FILTER
+     * SHIFT FILTER (MULTI-SELECT)
      * =====================================================
+     *
+     * Checkbox Shift adalah FILTER FRONTEND.
+     *
+     * Handler ini HANYA mengubah local state; TIDAK ada
+     * router.get/visit/reload, sehingga dropdown tetap
+     * terbuka dan user bisa mencentang beberapa shift
+     * berturut-turut tanpa navigasi halaman.
+     *
+     * Backend tetap dipakai untuk date & search saja
+     * (`groups` sudah berisi DATA LENGKAP untuk tanggal
+     * terpilih), lalu multi-shift disaring di client oleh
+     * `visibleGroups`.
      */
-    const handleShiftChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-        const value = event.target.value;
+    const handleShiftToggle = (value: string) => {
+        const target = normalizeShift(value);
 
-        setShift(value);
+        setSelectedShifts((current) => {
+            const exists = current.includes(target);
 
-        router.get(
-            '/release-schedule',
-            {
-                date,
-                shift: value || undefined,
-                search: submittedSearch || undefined,
-            },
-            {
-                preserveScroll: true,
-                replace: true,
-                only: ['groups', 'filters'],
-            },
-        );
+            const next = exists
+                ? current.filter((item) => item !== target)
+                : [...current, target];
+
+            /* Urutkan mengikuti urutan SHIFTS agar stabil. */
+            return SHIFTS.filter((item) => next.includes(item));
+        });
+    };
+
+    /** Reset filter Shift ke "Semua Shift" (tanpa pilihan). */
+    const handleShiftReset = () => {
+        setSelectedShifts([]);
     };
 
     /**
@@ -913,15 +1021,20 @@ export default function ScheduleIndex({ groups, filters }: Props) {
      * Tidak ada total menit global.
      * =====================================================
      */
-    const totalCso = groups.length;
+    const totalCso = visibleGroups.length;
 
     /**
      * =====================================================
      * SCHEDULED SHIFTS
      * =====================================================
+     *
+     * Mengikuti filter shift yang sedang aktif
+     * (visibleGroups), BUKAN seluruh groups.
      */
     const scheduledShifts = useMemo(() => {
-        const unique = Array.from(new Set(groups.map((group) => group.shift)));
+        const unique = Array.from(
+            new Set(visibleGroups.map((group) => normalizeShift(group.shift))),
+        );
 
         return unique.sort((a, b) => {
             const indexA = SHIFTS.indexOf(a);
@@ -931,7 +1044,7 @@ export default function ScheduleIndex({ groups, filters }: Props) {
                 (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB)
             );
         });
-    }, [groups]);
+    }, [visibleGroups]);
 
     /**
      * =====================================================
@@ -1338,21 +1451,64 @@ export default function ScheduleIndex({ groups, filters }: Props) {
                                 </label>
 
                                 <div className="relative">
-                                    <select
-                                        value={shift}
-                                        onChange={handleShiftChange}
-                                        className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-10 text-sm text-slate-700 transition outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                                    <Popover
+                                        open={shiftDropdownOpen}
+                                        onOpenChange={setShiftDropdownOpen}
                                     >
-                                        <option value="">Semua Shift</option>
+                                        <PopoverTrigger asChild>
+                                            <button
+                                                type="button"
+                                                className="flex h-11 w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 text-left text-sm text-slate-700 transition outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                                            >
+                                                <span className="truncate">
+                                                    {shiftFilterLabel(
+                                                        selectedShifts,
+                                                    )}
+                                                </span>
 
-                                        {SHIFTS.map((item) => (
-                                            <option key={item} value={item}>
-                                                Shift {item}
-                                            </option>
-                                        ))}
-                                    </select>
+                                                <ChevronDown className="ml-2 h-4 w-4 shrink-0 text-slate-400" />
+                                            </button>
+                                        </PopoverTrigger>
 
-                                    <ChevronDown className="pointer-events-none absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                        <PopoverContent
+                                            align="start"
+                                            className="w-[var(--radix-popover-trigger-width)] min-w-44 p-1"
+                                        >
+                                            <label className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-slate-600 transition hover:bg-slate-100">
+                                                <Checkbox
+                                                    checked={
+                                                        selectedShifts.length ===
+                                                        0
+                                                    }
+                                                    onCheckedChange={() =>
+                                                        handleShiftReset()
+                                                    }
+                                                />
+                                                <span>Semua Shift</span>
+                                            </label>
+
+                                            <div className="my-1 h-px bg-slate-100" />
+
+                                            {SHIFTS.map((item) => (
+                                                <label
+                                                    key={item}
+                                                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-slate-700 transition hover:bg-slate-100"
+                                                >
+                                                    <Checkbox
+                                                        checked={selectedShifts.includes(
+                                                            item,
+                                                        )}
+                                                        onCheckedChange={() =>
+                                                            handleShiftToggle(
+                                                                item,
+                                                            )
+                                                        }
+                                                    />
+                                                    <span>Shift {item}</span>
+                                                </label>
+                                            ))}
+                                        </PopoverContent>
+                                    </Popover>
                                 </div>
                             </div>
 
@@ -1536,7 +1692,7 @@ export default function ScheduleIndex({ groups, filters }: Props) {
                                 </thead>
 
                                 <tbody>
-                                    {groups.length === 0 ? (
+                                    {visibleGroups.length === 0 ? (
                                         <tr>
                                             <td
                                                 colSpan={5}
@@ -1561,7 +1717,7 @@ export default function ScheduleIndex({ groups, filters }: Props) {
                                             </td>
                                         </tr>
                                     ) : (
-                                        groups.map((group) => {
+                                        visibleGroups.map((group) => {
                                             const aux = group.auxiliary ?? null;
 
                                             /*
