@@ -1106,6 +1106,80 @@ export default function ScheduleIndex({ groups, filters }: Props) {
         const now = currentTime.getHours() * 60 + currentTime.getMinutes();
 
         groups.forEach((group) => {
+            /*
+             * =====================================================
+             * BATAS JADWAL RELEASE TERAKHIR PER CSO + TANGGAL + SHIFT
+             * =====================================================
+             *
+             * Alert "TIDAK RELEASE" tidak relevan lagi setelah
+             * seluruh jadwal release pada kombinasi CSO + tanggal
+             * + shift yang sama telah berakhir.
+             *
+             * Aturan (berdasarkan data yang tersedia):
+             * - Hanya jadwal NON-flexible dengan scheduled_start
+             *   yang ikut diperhitungkan.
+             * - Jam akhir memakai scheduled_end bila ada, jika
+             *   tidak memakai scheduled_start + duration_minutes.
+             * - Jam dibandingkan secara kronologis dalam menit,
+             *   dengan dukungan jadwal lintas tengah malam
+             *   (mis. 23:50 -> 00:05) via penambahan 24 jam.
+             *
+             * Jika salah satu waktu akhir tidak dapat dipastikan,
+             * batas dianggap tidak diketahui (Infinity) sehingga
+             * TIDAK ADA alert yang disembunyikan berdasarkan
+             * asumsi.
+             */
+            const slotEndMinutes = (schedule: ScheduleItem): number | null => {
+                if (schedule.is_flexible || !schedule.scheduled_start) {
+                    return null;
+                }
+
+                const slotStart = timeToMinutes(schedule.scheduled_start);
+
+                let slotEnd = schedule.scheduled_end
+                    ? timeToMinutes(schedule.scheduled_end)
+                    : slotStart + (schedule.duration_minutes ?? 0);
+
+                /* Jadwal lintas tengah malam. */
+                if (slotEnd < slotStart) {
+                    slotEnd += 24 * 60;
+                }
+
+                return slotEnd;
+            };
+
+            let lastEnd = -Infinity;
+            let lastEndUnknown = false;
+
+            group.schedules.forEach((schedule) => {
+                const end = slotEndMinutes(schedule);
+
+                if (end === null) {
+                    return;
+                }
+
+                if (end > lastEnd) {
+                    lastEnd = end;
+                }
+
+                /*
+                 * Waktu akhir tidak bisa dipastikan (durasi tidak
+                 * valid) -> jangan menebak, tandai sebagai tidak
+                 * diketahui.
+                 */
+                if (
+                    !schedule.scheduled_end &&
+                    (!schedule.duration_minutes ||
+                        schedule.duration_minutes <= 0)
+                ) {
+                    lastEndUnknown = true;
+                }
+            });
+
+            const groupLastEnd = lastEndUnknown
+                ? Number.POSITIVE_INFINITY
+                : lastEnd;
+
             group.schedules.forEach((schedule) => {
                 if (schedule.is_flexible || !schedule.scheduled_start) {
                     return;
@@ -1149,6 +1223,27 @@ export default function ScheduleIndex({ groups, filters }: Props) {
                  * Belum masuk jam release.
                  */
                 if (now < start) {
+                    return;
+                }
+
+                /**
+                 * =================================================
+                 * JADWAL RELEASE TERAKHIR SUDAH TERLEWATI
+                 * =================================================
+                 *
+                 * Alert TIDAK RELEASE hanya relevan selama masih ada
+                 * jadwal release pada kombinasi CSO + tanggal + shift
+                 * yang sama yang belum berakhir.
+                 *
+                 * Setelah waktu akhir jadwal terakhir pada kombinasi
+                 * tersebut terlewati, alert disembunyikan. Card dan
+                 * status (merah = Tidak Release) TIDAK diubah.
+                 *
+                 * Jika batas tidak dapat dipastikan (lastEndUnknown),
+                 * groupLastEnd = Infinity sehingga tidak ada alert yang
+                 * disembunyikan berdasarkan asumsi.
+                 */
+                if (now > groupLastEnd) {
                     return;
                 }
 
