@@ -63,7 +63,7 @@ class ReleaseSessionController extends Controller
             $query->where(
                 'agent_name',
                 'like',
-                '%' . $search . '%'
+                '%'.$search.'%'
             );
         }
 
@@ -236,7 +236,7 @@ class ReleaseSessionController extends Controller
                 }
 
                 $allocatedMinutes = $items->sum(
-                    fn(
+                    fn (
                         ReleaseSchedule $item
                     ) => (int) $item->duration_minutes
                 );
@@ -270,7 +270,7 @@ class ReleaseSessionController extends Controller
                     'release_count' => $items->count(),
 
                     'has_history' => $items->contains(
-                        fn(
+                        fn (
                             ReleaseSchedule $item
                         ) => $item->sessions->isNotEmpty()
                     ),
@@ -297,7 +297,7 @@ class ReleaseSessionController extends Controller
                     'total_slots' => $schedules->count(),
 
                     'total_minutes' => $schedules->sum(
-                        fn(
+                        fn (
                             ReleaseSchedule $schedule
                         ) => (int)
                         $schedule->duration_minutes
@@ -519,7 +519,7 @@ class ReleaseSessionController extends Controller
          * dan schedule kembali memakai logika jam saja.
          */
         Cache::put(
-            'release:busy:' . $agentName,
+            'release:busy:'.$agentName,
             $customerActive,
             now()->addSeconds(90)
         );
@@ -591,13 +591,13 @@ class ReleaseSessionController extends Controller
         foreach ($schedules as $schedule) {
             $session =
                 ReleaseSession::query()
-                ->where(
-                    'release_schedule_id',
-                    $schedule->id
-                )
-                ->latest('id')
-                ->lockForUpdate()
-                ->first();
+                    ->where(
+                        'release_schedule_id',
+                        $schedule->id
+                    )
+                    ->latest('id')
+                    ->lockForUpdate()
+                    ->first();
 
             /*
              * ----------------------------------------------------
@@ -660,7 +660,8 @@ class ReleaseSessionController extends Controller
                     $finished =
                         $this->finishAutomatically(
                             $session,
-                            $schedule
+                            $schedule,
+                            $schedules
                         );
 
                     return [
@@ -998,9 +999,9 @@ class ReleaseSessionController extends Controller
 
         $schedule =
             ReleaseSchedule::query()
-            ->find(
-                $result['schedule_id']
-            );
+                ->find(
+                    $result['schedule_id']
+                );
 
         if (! $schedule) {
             return $result;
@@ -1008,12 +1009,12 @@ class ReleaseSessionController extends Controller
 
         $session =
             ReleaseSession::query()
-            ->where(
-                'release_schedule_id',
-                $schedule->id
-            )
-            ->latest('id')
-            ->first();
+                ->where(
+                    'release_schedule_id',
+                    $schedule->id
+                )
+                ->latest('id')
+                ->first();
 
         $result['release'] = [
             'schedule_id' => $schedule->id,
@@ -1077,27 +1078,36 @@ class ReleaseSessionController extends Controller
      */
     private function finishAutomatically(
         ReleaseSession $session,
-        ReleaseSchedule $schedule
+        ReleaseSchedule $schedule,
+        $allSchedules = null
     ): ReleaseSession {
         if (! $session->actual_start) {
             return $session;
         }
 
-        $now = now();
+        /*
+         * Durasi memakai elapsed yang DIBATASI ke release window
+         * (single source of truth: getBoundedElapsedSeconds()).
+         *
+         * Tanpa batas ini, waktu tunggu / jarak actual_start ke
+         * sekarang yang membengkak membuat CSO yang baru kembali
+         * bekerja setelah istirahat Makan langsung distempel
+         * 'overtime' padahal belum melewati haknya.
+         */
+        $duration = $this->getBoundedElapsedSeconds(
+            $session,
+            $schedule
+        );
 
-        $duration =
-            max(
-                0,
-                $session
-                    ->actual_start
-                    ->diffInSeconds(
-                        $now
-                    )
-            );
-
+        /*
+         * Hak release memakai konteks seluruh jadwal (carry-over)
+         * yang sama dengan perhitungan saat menerima sesi release.
+         * Rumus carry-over sendiri tidak diubah.
+         */
         $allowed =
             $this->getAllowedDurationSeconds(
-                $schedule
+                $schedule,
+                $allSchedules
             );
 
         $status =
@@ -1106,7 +1116,15 @@ class ReleaseSessionController extends Controller
             : 'completed';
 
         $session->update([
-            'actual_end' => $now,
+            /*
+             * actual_end = waktu AKTUAL penutupan (CSO kembali
+             * menangani customer), bukan actual_start + durasi.
+             *
+             * Memakai `now()` membuat timestamp histori jujur
+             * (bukan waktu lampau). Yang dibatasi window adalah
+             * DURASI pemakaian, bukan waktu penutupannya.
+             */
+            'actual_end' => now(),
 
             'duration_used_seconds' => $duration,
 
@@ -1126,12 +1144,12 @@ class ReleaseSessionController extends Controller
     ): JsonResponse {
         $session =
             ReleaseSession::query()
-            ->where(
-                'release_schedule_id',
-                $releaseSchedule->id
-            )
-            ->latest('id')
-            ->first();
+                ->where(
+                    'release_schedule_id',
+                    $releaseSchedule->id
+                )
+                ->latest('id')
+                ->first();
 
         return response()->json([
             'success' => true,
@@ -1174,7 +1192,7 @@ class ReleaseSessionController extends Controller
 
                 'tolerance_minutes' => (int) (
                     $releaseSchedule
-                    ->tolerance_minutes
+                        ->tolerance_minutes
                     ?? 5
                 ),
             ],
@@ -1204,6 +1222,40 @@ class ReleaseSessionController extends Controller
 
     /**
      * ============================================================
+     * SESSION SUDAH BERAKHIR?
+     * ============================================================
+     *
+     * Satu-satunya sumber kebenaran untuk memutuskan apakah sebuah
+     * session masih "berjalan" atau sudah selesai.
+     *
+     * Dipakai bersama oleh getMonitorStatus() dan getStatusLabel()
+     * agar keduanya tidak pernah berbeda keputusan.
+     *
+     * Aturan:
+     * - actual_end terisi  -> SELESAI (status apapun, termasuk
+     *   overtime yang sudah ditutup saat CSO kembali bekerja).
+     * - status 'missed'    -> SELESAI tanpa actual_start/actual_end.
+     * - selain itu         -> masih berjalan.
+     *
+     * Catatan: status historis di database TIDAK diubah; ini
+     * hanya penentuan tampilan (monitor_status / status_label).
+     */
+    private function isSessionFinished(
+        ?ReleaseSession $session
+    ): bool {
+        if (! $session) {
+            return false;
+        }
+
+        if ($session->actual_end) {
+            return true;
+        }
+
+        return $session->status === 'missed';
+    }
+
+    /**
+     * ============================================================
      * MONITOR STATUS
      * ============================================================
      */
@@ -1212,16 +1264,23 @@ class ReleaseSessionController extends Controller
         ?ReleaseSession $session,
         bool $customerActive = false
     ): string {
-        if (
-            $session?->status === 'completed'
-        ) {
-            return 'released';
-        }
-
-        if (
-            $session?->status === 'overtime'
-        ) {
-            return 'overtime';
+        /*
+         * Session sudah berakhir (actual_end terisi, atau missed).
+         *
+         * Overtime yang SUDAH ditutup TIDAK boleh terus ditampilkan
+         * sebagai release aktif. Status monitor yang benar:
+         *
+         * - completed / active / overtime tertutup -> 'released'
+         *   (release sudah selesai; 'released' adalah nilai akhir
+         *   yang sudah dipahami seluruh konsumen monitor_status).
+         * - missed (tanpa waktu mulai)             -> 'missed'
+         *
+         * Status historis di database tidak diubah.
+         */
+        if ($this->isSessionFinished($session)) {
+            return $session?->status === 'missed'
+                ? 'missed'
+                : 'released';
         }
 
         if (
@@ -1231,9 +1290,9 @@ class ReleaseSessionController extends Controller
         }
 
         if (
-            $session?->status === 'missed'
+            $session?->status === 'overtime'
         ) {
-            return 'missed';
+            return 'overtime';
         }
 
         if ($schedule->is_flexible) {
@@ -1279,7 +1338,7 @@ class ReleaseSessionController extends Controller
          */
         $busy = $customerActive
             || (bool) Cache::get(
-                'release:busy:' . $schedule->agent_name,
+                'release:busy:'.$schedule->agent_name,
                 false
             );
 
@@ -1337,11 +1396,11 @@ class ReleaseSessionController extends Controller
 
             $endDate =
                 $start
-                ->format('Y-m-d');
+                    ->format('Y-m-d');
 
             $end = Carbon::createFromFormat(
                 'Y-m-d H:i:s',
-                $endDate . ' ' . $endTime,
+                $endDate.' '.$endTime,
                 'Asia/Makassar'
             );
 
@@ -1378,16 +1437,17 @@ class ReleaseSessionController extends Controller
         ?ReleaseSession $session,
         bool $customerActive = false
     ): string {
-        if (
-            $session?->status === 'completed'
-        ) {
-            return 'Sudah Release';
-        }
-
-        if (
-            $session?->status === 'overtime'
-        ) {
-            return 'Overtime';
+        /*
+         * WAJIB sama dengan getMonitorStatus(): session yang sudah
+         * berakhir tidak boleh berlabel 'Overtime' / 'Sedang Release'.
+         *
+         * Gunakan helper isSessionFinished() yang sama agar kedua
+         * fungsi tidak pernah berbeda keputusan.
+         */
+        if ($this->isSessionFinished($session)) {
+            return $session?->status === 'missed'
+                ? 'Tidak Release'
+                : 'Sudah Release';
         }
 
         if (
@@ -1397,9 +1457,9 @@ class ReleaseSessionController extends Controller
         }
 
         if (
-            $session?->status === 'missed'
+            $session?->status === 'overtime'
         ) {
-            return 'Tidak Release';
+            return 'Overtime';
         }
 
         if (
@@ -1428,7 +1488,7 @@ class ReleaseSessionController extends Controller
          */
         $busy = $customerActive
             || (bool) Cache::get(
-                'release:busy:' . $schedule->agent_name,
+                'release:busy:'.$schedule->agent_name,
                 false
             );
 
@@ -1466,7 +1526,7 @@ class ReleaseSessionController extends Controller
     ): Carbon {
         $date =
             $schedule->date
-            ->format('Y-m-d');
+                ->format('Y-m-d');
 
         $time =
             $schedule->scheduled_start
@@ -1499,7 +1559,7 @@ class ReleaseSessionController extends Controller
          */
         $start = Carbon::createFromFormat(
             'Y-m-d H:i:s',
-            $date . ' ' . $time,
+            $date.' '.$time,
             'Asia/Makassar'
         );
 
@@ -1692,61 +1752,79 @@ class ReleaseSessionController extends Controller
         } else {
             $previousSchedules =
                 ReleaseSchedule::query()
-                ->where(
-                    'agent_name',
-                    $schedule->agent_name
-                )
-                ->where(
-                    'shift',
-                    $schedule->shift
-                )
-                ->whereDate(
-                    'date',
-                    $schedule->date
-                )
-                ->where(
-                    'active',
-                    true
-                )
-                ->where(
-                    'is_flexible',
-                    false
-                )
-                ->with([
-                    'sessions' => function ($query) {
-                        $query->orderByDesc('id');
-                    },
-                ])
-                ->orderBy(
-                    'scheduled_start'
-                )
-                ->orderBy('id')
-                ->get();
+                    ->where(
+                        'agent_name',
+                        $schedule->agent_name
+                    )
+                    ->where(
+                        'shift',
+                        $schedule->shift
+                    )
+                    ->whereDate(
+                        'date',
+                        $schedule->date
+                    )
+                    ->where(
+                        'active',
+                        true
+                    )
+                    ->where(
+                        'is_flexible',
+                        false
+                    )
+                    ->with([
+                        'sessions' => function ($query) {
+                            $query->orderByDesc('id');
+                        },
+                    ])
+                    ->orderBy(
+                        'scheduled_start'
+                    )
+                    ->orderBy('id')
+                    ->get();
         }
 
         $carrySeconds = 0;
 
-        foreach (
-            $previousSchedules as $previous
-        ) {
-            if (
-                $previous->id ===
-                $schedule->id
-            ) {
+        /*
+         * ====================================================
+         * CARRY-OVER: HANYA DARI SLOT TEPAT SEBELUMNYA
+         * ====================================================
+         *
+         * Aturan bisnis (lihat komentar fungsi ini):
+         *   Slot 1 hak 15, dipakai 10, sisa 5
+         *   Slot 2 hak 15 + 5 (sisa slot 1) = 20
+         *
+         * Sisa slot yang lebih lama TIDAK boleh diwariskan
+         * berantai. Sebelumnya loop ini memutasi carry dari
+         * SETIAP slot sebelumnya (`+ $carrySeconds` lalu
+         * menimpanya), sehingga mis. slot 15 menit bisa
+         * mendapat `allowed` 1499 detik (25 menit) karena
+         * sisa slot-slot sebelumnya menumpuk.
+         *
+         * Karena itu: ambil HANYA slot tepat sebelum slot
+         * yang sedang dinilai, lalu hentikan loop.
+         */
+        $previous = null;
+
+        foreach ($previousSchedules as $item) {
+            if ($item->id === $schedule->id) {
                 break;
             }
 
-            /*
-             * Ambil session terbaru dari relasi yang sudah
-             * dimuat (eager-loaded) bila tersedia; kalau tidak,
-             * baru query. Hasil tetap sama: session dengan
-             * id terbesar.
-             */
-            $previousSession = $previous->relationLoaded(
-                'sessions'
-            )
-                ? $previous->sessions->first()
-                : ReleaseSession::query()
+            /* Kandidat slot tepat sebelumnya (urutan sudah asc). */
+            $previous = $item;
+        }
+
+        if ($previous === null) {
+            return 0;
+        }
+
+        $previousSession = $previous->relationLoaded(
+            'sessions'
+        )
+            ? $previous->sessions->first()
+            : ReleaseSession::query()
                 ->where(
                     'release_schedule_id',
                     $previous->id
@@ -1754,72 +1832,47 @@ class ReleaseSessionController extends Controller
                 ->latest('id')
                 ->first();
 
-            /*
-             * Belum release:
-             * jangan memindahkan saldo.
-             */
-            if (! $previousSession) {
-                continue;
-            }
-
-            /*
-             * Missed:
-             * tidak menghasilkan carry.
-             */
-            if (
-                $previousSession->status ===
-                'missed'
-            ) {
-                $carrySeconds = 0;
-
-                continue;
-            }
-
-            /*
-             * Overtime:
-             * hak sudah habis.
-             */
-            if (
-                $previousSession->status ===
-                'overtime'
-            ) {
-                $carrySeconds = 0;
-
-                continue;
-            }
-
-            if (
-                $previousSession->status !==
-                'completed'
-            ) {
-                continue;
-            }
-
-            $previousAllowed =
-                (
-                    (int)
-                    $previous->duration_minutes
-                    * 60
-                )
-                + $carrySeconds;
-
-            $used =
-                max(
-                    0,
-                    (int)
-                    $previousSession
-                        ->duration_used_seconds
-                );
-
-            $carrySeconds =
-                max(
-                    0,
-                    $previousAllowed
-                        - $used
-                );
+        /* Belum release: tidak ada saldo yang dipindahkan. */
+        if (! $previousSession) {
+            return 0;
         }
 
-        return $carrySeconds;
+        /* Missed: tidak menghasilkan carry. */
+        if ($previousSession->status === 'missed') {
+            return 0;
+        }
+
+        /* Overtime: hak sudah habis, tidak menyisakan saldo. */
+        if ($previousSession->status === 'overtime') {
+            return 0;
+        }
+
+        /*
+         * Hanya sesi 'completed' yang menyisakan saldo.
+         * Status lain (mis. masih active) -> tidak ada carry.
+         */
+        if ($previousSession->status !== 'completed') {
+            return 0;
+        }
+
+        /*
+         * Sisa = hak slot sebelumnya - pemakaian aktual.
+         *
+         * Hak slot sebelumnya adalah hak NOMINAL slot itu
+         * (base), bukan hak yang sudah mengemban carry slot
+         * sebelumnya lagi, agar tidak terjadi akumulasi.
+         */
+        $previousBase =
+            (int) $previous->duration_minutes * 60;
+
+        $used =
+            max(
+                0,
+                (int) $previousSession
+                    ->duration_used_seconds
+            );
+
+        return max(0, $previousBase - $used);
     }
 
     /**
@@ -1902,19 +1955,19 @@ class ReleaseSessionController extends Controller
 
             'actual_start' => $session->actual_start
                 ? $session
-                ->actual_start
-                /*
+                    ->actual_start
+                    /*
                          * ISO-8601 UTC agar new Date() di
                          * frontend menghitung timer dengan
                          * benar di timezone browser mana pun.
                          */
-                ->format('Y-m-d\\TH:i:s\\Z')
+                    ->format('Y-m-d\\TH:i:s\\Z')
                 : null,
 
             'actual_end' => $session->actual_end
                 ? $session
-                ->actual_end
-                ->format('Y-m-d\\TH:i:s\\Z')
+                    ->actual_end
+                    ->format('Y-m-d\\TH:i:s\\Z')
                 : null,
 
             'duration_used_seconds' => $used,

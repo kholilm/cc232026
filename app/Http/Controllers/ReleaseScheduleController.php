@@ -97,7 +97,7 @@ class ReleaseScheduleController extends Controller
             $query->where(
                 'agent_name',
                 'like',
-                '%' . $search . '%'
+                '%'.$search.'%'
             );
         }
 
@@ -162,7 +162,7 @@ class ReleaseScheduleController extends Controller
                  * bukan tambahan kuota baru.
                  */
                 $allocatedMinutes = $items->sum(
-                    fn(ReleaseSchedule $item) => (int) $item->duration_minutes
+                    fn (ReleaseSchedule $item) => (int) $item->duration_minutes
                 );
 
                 $usedMinutes = 0;
@@ -257,9 +257,9 @@ class ReleaseScheduleController extends Controller
                             $usedSeconds = app(
                                 ReleaseSessionController::class
                             )->boundedElapsedSeconds(
-                                    $session,
-                                    $item
-                                );
+                                $session,
+                                $item
+                            );
                         } else {
                             /*
                              * Release sudah selesai.
@@ -306,10 +306,17 @@ class ReleaseScheduleController extends Controller
                      *
                      * Carry-over dihitung dari:
                      *
-                     * (durasi slot + carry-in) - pemakaian aktual
+                     * durasi NOMINAL slot - pemakaian aktual
                      *
                      * hanya ketika session sudah selesai
                      * (completed).
+                     *
+                     * Catatan: carry-in dari slot sebelumnya TIDAK
+                     * ditambahkan lagi ke hak slot ini, agar tidak
+                     * terjadi akumulasi berantai. Sisa hanya berasal
+                     * dari slot tepat sebelumnya, konsisten dengan
+                     * ReleaseSessionController::
+                     * calculateCarryOverSeconds().
                      */
                     $carryOver = 0;
 
@@ -318,9 +325,7 @@ class ReleaseScheduleController extends Controller
                         && $session->status === 'completed'
                     ) {
                         $allowedSeconds =
-                            ((int) $item->duration_minutes
-                                + $carriedIn)
-                            * 60;
+                            (int) $item->duration_minutes * 60;
 
                         $carryOver = intdiv(
                             max(
@@ -364,31 +369,46 @@ class ReleaseScheduleController extends Controller
                     $statusLabel = 'Akan Release';
 
                     if ($session) {
-                        switch ($session->status) {
-                            case 'active':
-                                $monitorStatus = 'releasing';
-                                $statusLabel = 'Sedang Release';
-                                break;
+                        /*
+                         * WAJIB sama dengan ReleaseSessionController:
+                         * session yang SUDAH berakhir (actual_end
+                         * terisi) tidak boleh ditampilkan sebagai
+                         * release aktif / OVERTIME hanya karena status
+                         * historisnya masih 'overtime'.
+                         *
+                         * Diatur di sini secara minimal (tanpa refactor)
+                         * agar kedua halaman konsisten.
+                         */
+                        if ($session->actual_end) {
+                            $monitorStatus = 'released';
+                            $statusLabel = 'Sudah Release';
+                        } else {
+                            switch ($session->status) {
+                                case 'active':
+                                    $monitorStatus = 'releasing';
+                                    $statusLabel = 'Sedang Release';
+                                    break;
 
-                            case 'overtime':
-                                $monitorStatus = 'overtime';
-                                $statusLabel = 'Overtime';
-                                break;
+                                case 'overtime':
+                                    $monitorStatus = 'overtime';
+                                    $statusLabel = 'Overtime';
+                                    break;
 
-                            case 'completed':
-                                $monitorStatus = 'released';
-                                $statusLabel = 'Sudah Release';
-                                break;
+                                case 'completed':
+                                    $monitorStatus = 'released';
+                                    $statusLabel = 'Sudah Release';
+                                    break;
 
-                            case 'missed':
-                                $monitorStatus = 'missed';
-                                $statusLabel = 'Tidak Release';
-                                break;
+                                case 'missed':
+                                    $monitorStatus = 'missed';
+                                    $statusLabel = 'Tidak Release';
+                                    break;
 
-                            default:
-                                $monitorStatus = 'upcoming';
-                                $statusLabel = 'Akan Release';
-                                break;
+                                default:
+                                    $monitorStatus = 'upcoming';
+                                    $statusLabel = 'Akan Release';
+                                    break;
+                            }
                         }
                     } elseif ($item->is_flexible) {
                         $monitorStatus = 'upcoming';
@@ -408,7 +428,7 @@ class ReleaseScheduleController extends Controller
                          */
                         $scheduledTime =
                             strlen($item->scheduled_start) === 5
-                            ? $item->scheduled_start . ':00'
+                            ? $item->scheduled_start.':00'
                             : substr(
                                 $item->scheduled_start,
                                 0,
@@ -418,8 +438,8 @@ class ReleaseScheduleController extends Controller
                         $scheduledDateTime = Carbon::createFromFormat(
                             'Y-m-d H:i:s',
                             $item->date->format('Y-m-d')
-                            . ' '
-                            . $scheduledTime,
+                            .' '
+                            .$scheduledTime,
                             'Asia/Makassar'
                         );
 
@@ -447,7 +467,7 @@ class ReleaseScheduleController extends Controller
                         if ($item->scheduled_end) {
                             $endTime =
                                 strlen($item->scheduled_end) === 5
-                                ? $item->scheduled_end . ':00'
+                                ? $item->scheduled_end.':00'
                                 : substr(
                                     $item->scheduled_end,
                                     0,
@@ -458,8 +478,8 @@ class ReleaseScheduleController extends Controller
                                 Carbon::createFromFormat(
                                     'Y-m-d H:i:s',
                                     $scheduledDateTime->format('Y-m-d')
-                                    . ' '
-                                    . $endTime,
+                                    .' '
+                                    .$endTime,
                                     'Asia/Makassar'
                                 )
                                     ->addMinutes($toleranceMinutes);
@@ -493,7 +513,7 @@ class ReleaseScheduleController extends Controller
                          * sumber data yang sama dengan ReleaseMonitor.
                          */
                         $busy = (bool) Cache::get(
-                            'release:busy:' . $first->agent_name,
+                            'release:busy:'.$first->agent_name,
                             false
                         );
 
@@ -566,10 +586,10 @@ class ReleaseScheduleController extends Controller
                             ? app(
                                 ReleaseSessionController::class
                             )->formatSession(
-                                    $session,
-                                    $item,
-                                    $items
-                                )
+                                $session,
+                                $item,
+                                $items
+                            )
                             : null,
 
                         'carried_in_minutes' => $carriedIn,
@@ -663,7 +683,7 @@ class ReleaseScheduleController extends Controller
                     'release_count' => $items->count(),
 
                     'has_history' => $items->contains(
-                        fn(ReleaseSchedule $item) => $item->sessions->isNotEmpty()
+                        fn (ReleaseSchedule $item) => $item->sessions->isNotEmpty()
                     ),
 
                     'schedules' => collect($scheduleData)->values(),
@@ -908,9 +928,9 @@ class ReleaseScheduleController extends Controller
                  * identitas paket tidak boleh diubah.
                  */
                 $hasHistory = $existing->contains(
-                    fn(
-                    ReleaseSchedule $item
-                ) => (int) $item->sessions_count > 0
+                    fn (
+                        ReleaseSchedule $item
+                    ) => (int) $item->sessions_count > 0
                 );
 
                 if ($hasHistory) {
@@ -958,11 +978,11 @@ class ReleaseScheduleController extends Controller
                 )
                     ->pluck('id')
                     ->filter(
-                        fn($id) => !empty($id)
+                        fn ($id) => ! empty($id)
                             && (int) $id > 0
                     )
                     ->map(
-                        fn($id) => (int) $id
+                        fn ($id) => (int) $id
                     )
                     ->values();
 
@@ -988,7 +1008,7 @@ class ReleaseScheduleController extends Controller
                 foreach (
                     $validated['releases'] as $release
                 ) {
-                    $id = !empty($release['id'])
+                    $id = ! empty($release['id'])
                         ? (int) $release['id']
                         : null;
 
@@ -1005,7 +1025,7 @@ class ReleaseScheduleController extends Controller
                                 $id
                             );
 
-                        if (!$schedule) {
+                        if (! $schedule) {
                             abort(
                                 422,
                                 'Jadwal tidak ditemukan.'
@@ -1017,7 +1037,7 @@ class ReleaseScheduleController extends Controller
                          * tidak boleh diubah.
                          */
                         if (
-                            (int) 
+                            (int)
                             $schedule
                                 ->sessions_count
                             > 0
@@ -1048,11 +1068,12 @@ class ReleaseScheduleController extends Controller
                     }
 
                     if (
-                        (int) 
+                        (int)
                         $old->sessions_count
                         > 0
                     ) {
                         $hasHistoryError = true;
+
                         continue;
                     }
 
@@ -1103,10 +1124,12 @@ class ReleaseScheduleController extends Controller
 
                     if ((int) $releaseSchedule->sessions_count > 0) {
                         $hasHistory = true;
+
                         return;
                     }
 
                     $releaseSchedule->delete();
+
                     return;
                 }
 
@@ -1136,9 +1159,9 @@ class ReleaseScheduleController extends Controller
                 }
 
                 $hasHistory = $schedules->contains(
-                    fn(
-                    ReleaseSchedule $item
-                ) => (int) $item->sessions_count > 0
+                    fn (
+                        ReleaseSchedule $item
+                    ) => (int) $item->sessions_count > 0
                 );
 
                 if ($hasHistory) {
@@ -1300,7 +1323,7 @@ class ReleaseScheduleController extends Controller
                 ? null
                 : $release['scheduled_end'],
 
-            'duration_minutes' => (int) 
+            'duration_minutes' => (int)
                 $release['duration_minutes'],
 
             'is_flexible' => $isFlexible,
@@ -1408,7 +1431,7 @@ class ReleaseScheduleController extends Controller
              * dengan jam mulai dan selesai.
              */
             if (
-                (int) 
+                (int)
                 $release['duration_minutes']
                 !==
                 $duration
@@ -1483,7 +1506,7 @@ class ReleaseScheduleController extends Controller
                             continue;
                         }
 
-                        if (!empty($agent['auxiliary'])) {
+                        if (! empty($agent['auxiliary'])) {
                             $map[$name] = $agent['auxiliary'];
                         }
                     }

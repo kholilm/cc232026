@@ -1474,7 +1474,7 @@ export default function ScheduleIndex({ groups, filters }: Props) {
                                             align="start"
                                             className="w-[var(--radix-popover-trigger-width)] min-w-44 p-1"
                                         >
-                                            <label className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-slate-600 transition hover:bg-slate-100">
+                                            <label className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-slate-400 transition hover:bg-slate-100">
                                                 <Checkbox
                                                     checked={
                                                         selectedShifts.length ===
@@ -1492,7 +1492,7 @@ export default function ScheduleIndex({ groups, filters }: Props) {
                                             {SHIFTS.map((item) => (
                                                 <label
                                                     key={item}
-                                                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-slate-700 transition hover:bg-slate-100"
+                                                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm text-slate-400 transition hover:bg-slate-100"
                                                 >
                                                     <Checkbox
                                                         checked={selectedShifts.includes(
